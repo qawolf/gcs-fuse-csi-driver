@@ -32,7 +32,7 @@ DRIVER_IMAGE = ${REGISTRY}/${DRIVER_BINARY}
 SIDECAR_IMAGE = ${REGISTRY}/${SIDECAR_BINARY}
 WEBHOOK_IMAGE = ${REGISTRY}/${WEBHOOK_BINARY}
 
-DOCKER_BUILDX_ARGS ?= --push --builder multiarch-multiplatform-builder --build-arg STAGINGVERSION=${STAGINGVERSION}
+DOCKER_BUILDX_ARGS ?= --push --builder default --build-arg STAGINGVERSION=${STAGINGVERSION}
 ifneq ("$(shell docker buildx build --help | grep 'provenance')", "")
 DOCKER_BUILDX_ARGS += --provenance=false
 endif
@@ -51,7 +51,7 @@ driver:
 
 sidecar-mounter:
 	mkdir -p ${BINDIR}
-	CGO_ENABLED=0 GOOS=linux GOARCH=$(shell dpkg --print-architecture) go build -mod vendor -ldflags "${LDFLAGS}" -o ${BINDIR}/${SIDECAR_BINARY} cmd/sidecar_mounter/main.go
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(shell go env GOARCH) go build -mod vendor -ldflags "${LDFLAGS}" -o ${BINDIR}/${SIDECAR_BINARY} cmd/sidecar_mounter/main.go
 
 webhook:
 	mkdir -p ${BINDIR}
@@ -119,7 +119,7 @@ init-buildx:
 	# Required for "docker buildx build --push".
 	gcloud auth configure-docker --quiet
 
-build-image-and-push-multi-arch: init-buildx download-gcsfuse build-image-linux-amd64
+build-image-and-push-multi-arch: download-gcsfuse build-image-linux-amd64
 ifeq (${BUILD_ARM}, true)
 	make build-image-linux-arm64
 	docker manifest create ${DRIVER_IMAGE}:${STAGINGVERSION} ${DRIVER_IMAGE}:${STAGINGVERSION}_linux_amd64 ${DRIVER_IMAGE}:${STAGINGVERSION}_linux_arm64

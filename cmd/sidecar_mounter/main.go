@@ -22,10 +22,11 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sync"
+	"strings"
 	"syscall"
 	"time"
 
@@ -53,66 +54,84 @@ func main() {
 	if err != nil {
 		klog.Fatalf("failed to look up socket paths: %v", err)
 	}
-
 	mounter := sidecarmounter.New(*gcsfusePath)
-	var wg sync.WaitGroup
-
-	for _, sp := range socketPaths {
-		// sleep 1.5 seconds before launch the next gcsfuse to avoid
-		// 1. different gcsfuse logs mixed together.
-		// 2. memory usage peak.
-		time.Sleep(1500 * time.Millisecond)
-		errWriter := sidecarmounter.NewErrorWriter(filepath.Join(filepath.Dir(sp), "error"))
-		mc, err := prepareMountConfig(sp)
-		if err != nil {
-			errMsg := fmt.Sprintf("failed prepare mount config: socket path %q: %v\n", sp, err)
-			klog.Errorf(errMsg)
-			if _, e := errWriter.Write([]byte(errMsg)); e != nil {
-				klog.Errorf("failed to write the error message %q: %v", errMsg, e)
-			}
-
-			continue
-		}
-		mc.ErrWriter = errWriter
-
-		wg.Add(1)
-		go func(mc *sidecarmounter.MountConfig) {
-			defer wg.Done()
-			cmd, err := mounter.Mount(mc)
-			if err != nil {
-				errMsg := fmt.Sprintf("failed to mount bucket %q for volume %q: %v\n", mc.BucketName, mc.VolumeName, err)
-				klog.Errorf(errMsg)
-				if _, e := errWriter.Write([]byte(errMsg)); e != nil {
-					klog.Errorf("failed to write the error message %q: %v", errMsg, e)
-				}
-
-				return
-			}
-
-			if err = cmd.Start(); err != nil {
-				errMsg := fmt.Sprintf("failed to start gcsfuse with error: %v\n", err)
-				klog.Errorf(errMsg)
-				if _, e := errWriter.Write([]byte(errMsg)); e != nil {
-					klog.Errorf("failed to write the error message %q: %v", errMsg, e)
-				}
-
-				return
-			}
-
-			// Since the gcsfuse has taken over the file descriptor,
-			// closing the file descriptor to avoid other process forking it.
-			syscall.Close(mc.FileDescriptor)
-			if err = cmd.Wait(); err != nil {
-				errMsg := fmt.Sprintf("gcsfuse exited with error: %v\n", err)
-				klog.Errorf(errMsg)
-				if _, e := errWriter.Write([]byte(errMsg)); e != nil {
-					klog.Errorf("failed to write the error message %q: %v", errMsg, e)
-				}
-			} else {
-				klog.Infof("[%v] gcsfuse exited normally.", mc.VolumeName)
-			}
-		}(mc)
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: http.DefaultServeMux,
 	}
+	http.DefaultServeMux.Handle("/mount", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		type MountRequest struct {
+			VolumeName   string `json:"volumeName"`
+			ObjectPrefix string `json:"objectPrefix"`
+		}
+		mountRequest := &MountRequest{}
+		if err := json.NewDecoder(r.Body).Decode(mountRequest); err != nil {
+			klog.Errorf("failed to decode the request body: %v", err)
+			http.Error(w, fmt.Sprintf("failed to decode the request body: %v", err), http.StatusBadRequest)
+			return
+		}
+		for _, sp := range socketPaths {
+			// If the request is not for the volume of this socketPath, skip it.
+			if filepath.Base(filepath.Dir(sp)) != mountRequest.VolumeName {
+				continue
+			}
+			errWriter := sidecarmounter.NewErrorWriter(filepath.Join(filepath.Dir(sp), "error"))
+			mountConfig, err := prepareMountConfig(sp, mountRequest.ObjectPrefix)
+			if err != nil {
+				errMsg := fmt.Sprintf("failed prepare mount config: socket path %q: %v\n", sp, err)
+				klog.Errorf(errMsg)
+				if _, e := errWriter.Write([]byte(errMsg)); e != nil {
+					klog.Errorf("failed to write the error message %q: %v", errMsg, e)
+				}
+				continue
+			}
+			mountConfig.ErrWriter = errWriter
+
+			go func(mc *sidecarmounter.MountConfig) {
+				if cmd, ok := mounter.GetCmds()[mountRequest.VolumeName]; ok {
+					klog.V(4).Infof("killing existing gcsfuse process: %v", cmd)
+					err := cmd.Process.Kill()
+					if err != nil {
+						klog.Errorf("failed to kill process %v with error: %v", cmd, err)
+					}
+				}
+				cmd, err := mounter.Mount(mc)
+				if err != nil {
+					errMsg := fmt.Sprintf("failed to mount bucket %q for volume %q: %v\n", mc.BucketName, mc.VolumeName, err)
+					klog.Errorf(errMsg)
+					if _, e := errWriter.Write([]byte(errMsg)); e != nil {
+						klog.Errorf("failed to write the error message %q: %v", errMsg, e)
+					}
+
+					return
+				}
+
+				if err = cmd.Start(); err != nil {
+					errMsg := fmt.Sprintf("failed to start gcsfuse with error: %v\n", err)
+					klog.Errorf(errMsg)
+					if _, e := errWriter.Write([]byte(errMsg)); e != nil {
+						klog.Errorf("failed to write the error message %q: %v", errMsg, e)
+					}
+
+					return
+				}
+
+				// Since the gcsfuse has taken over the file descriptor,
+				// closing the file descriptor to avoid other process forking it.
+				syscall.Close(mc.FileDescriptor)
+				if err = cmd.Wait(); err != nil {
+					errMsg := fmt.Sprintf("gcsfuse exited with error: %v\n", err)
+					klog.Errorf(errMsg)
+					if _, e := errWriter.Write([]byte(errMsg)); e != nil {
+						klog.Errorf("failed to write the error message %q: %v", errMsg, e)
+					}
+				} else {
+					klog.Infof("[%v] gcsfuse exited normally.", mc.VolumeName)
+				}
+			}(mountConfig)
+		}
+		return
+	}))
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGTERM)
@@ -124,28 +143,30 @@ func main() {
 		ticker := time.NewTicker(5 * time.Second)
 		for {
 			<-ticker.C
-			if _, err := os.Stat(*volumeBasePath + "/exit"); err == nil {
-				klog.Infof("all the other containers terminated in the Pod, exiting the sidecar container. Sleep %v seconds before terminating gcsfuse processes.", *gracePeriod)
-				time.Sleep(time.Duration(*gracePeriod) * time.Second)
-
-				for _, cmd := range mounter.GetCmds() {
-					klog.V(4).Infof("killing gcsfue process: %v", cmd)
-					err := cmd.Process.Kill()
-					if err != nil {
-						klog.Errorf("failed to kill process %v with error: %v", cmd, err)
-					}
-				}
-
-				c <- syscall.SIGTERM
-
-				return
+			if _, err := os.Stat(*volumeBasePath + "/exit"); err != nil {
+				continue
 			}
+			klog.Infof("all the other containers terminated in the Pod, exiting the sidecar container. Sleep %v seconds before terminating gcsfuse processes.", *gracePeriod)
+			time.Sleep(time.Duration(*gracePeriod) * time.Second)
+
+			for _, cmd := range mounter.GetCmds() {
+				klog.V(4).Infof("killing gcsfuse process: %v", cmd)
+				err := cmd.Process.Kill()
+				if err != nil {
+					klog.Errorf("failed to kill process %v with error: %v", cmd, err)
+				}
+			}
+			_ = server.Close()
+			c <- syscall.SIGTERM
+
+			return
 		}
 	}()
-
+	if err := server.ListenAndServe(); err != nil {
+		klog.Fatalf("failed to start the http server: %v", err)
+	}
 	<-c // blocking the process
 	klog.Info("received SIGTERM signal, waiting for all the gcsfuse processes exit...")
-	wg.Wait()
 
 	klog.Info("exiting sidecar mounter...")
 }
@@ -155,7 +176,7 @@ func main() {
 // 2. The file descriptor
 // 3. GCS bucket name
 // 4. Mount options passing to gcsfuse (passed by the csi mounter).
-func prepareMountConfig(sp string) (*sidecarmounter.MountConfig, error) {
+func prepareMountConfig(sp string, dir string) (*sidecarmounter.MountConfig, error) {
 	// socket path pattern: /gcsfuse-tmp/.volumes/<volume-name>/socket
 	volumeName := filepath.Base(filepath.Dir(sp))
 	mc := sidecarmounter.MountConfig{
@@ -189,6 +210,13 @@ func prepareMountConfig(sp string) (*sidecarmounter.MountConfig, error) {
 	if mc.BucketName == "" {
 		return nil, fmt.Errorf("failed to fetch bucket name from CSI driver")
 	}
-
+	options := []string{}
+	for _, opt := range mc.Options {
+		if strings.Contains(opt, "only_dir=") {
+			continue
+		}
+		options = append(options, opt)
+	}
+	mc.Options = append(options, "only_dir="+dir)
 	return &mc, nil
 }

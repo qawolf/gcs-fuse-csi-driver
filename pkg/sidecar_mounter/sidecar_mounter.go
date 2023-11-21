@@ -34,7 +34,7 @@ const GCSFuseAppName = "gke-gcs-fuse-csi"
 // Mounter will be used in the sidecar container to invoke gcsfuse.
 type Mounter struct {
 	mounterPath string
-	cmds        []*exec.Cmd
+	cmds        map[string]*exec.Cmd
 }
 
 // New returns a Mounter for the current system.
@@ -42,7 +42,7 @@ type Mounter struct {
 func New(mounterPath string) *Mounter {
 	return &Mounter{
 		mounterPath: mounterPath,
-		cmds:        []*exec.Cmd{},
+		cmds:        map[string]*exec.Cmd{},
 	}
 }
 
@@ -91,13 +91,12 @@ func (m *Mounter) Mount(mc *MountConfig) (*exec.Cmd, error) {
 		Stdout:     os.Stdout,
 		Stderr:     io.MultiWriter(os.Stderr, mc.ErrWriter),
 	}
-
-	m.cmds = append(m.cmds, &cmd)
+	m.cmds[mc.VolumeName] = &cmd
 
 	return &cmd, nil
 }
 
-func (m *Mounter) GetCmds() []*exec.Cmd {
+func (m *Mounter) GetCmds() map[string]*exec.Cmd {
 	return m.cmds
 }
 
