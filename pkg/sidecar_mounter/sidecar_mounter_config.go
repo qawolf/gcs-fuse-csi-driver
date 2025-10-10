@@ -342,7 +342,8 @@ func (mc *MountConfig) prepareConfigFile() error {
 			}
 		}
 	}
-	if mc.TokenServerIdentityProvider != "" && mc.HostNetworkKSAOptIn {
+	// Set token URL for Host Network pods or OSS K8s with Workload Identity Federation
+	if mc.TokenServerIdentityProvider != "" {
 		configMap["gcs-auth"] = map[string]interface{}{
 			"token-url": unixSocketBasePath + filepath.Join(mc.TempDir, TokenFileName),
 		}

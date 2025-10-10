@@ -138,7 +138,8 @@ func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 		return nil, status.Errorf(codes.NotFound, "failed to get pod: %v", err)
 	}
 	gcsFuseSidecarImage := gcsFuseSidecarContainerImage(pod)
-	enableSidecarBucketAccessCheckForSidecarVersion := s.driver.config.EnableSidecarBucketAccessCheck && gcsFuseSidecarImage != "" && isSidecarVersionSupportedForGivenFeature(gcsFuseSidecarImage, SidecarBucketAccessCheckMinVersion)
+	// Check if we should pass identity pool/provider to sidecar (for OSS K8s with Workload Identity Federation)
+	enableWorkloadIdentityForSidecar := gcsFuseSidecarImage != "" && isSidecarVersionSupportedForGivenFeature(gcsFuseSidecarImage, SidecarWorkloadIdentityMinVersion)
 	identityProvider := ""
 	if s.shouldPopulateIdentityProvider(pod, optInHostnetworkKSA, userSpecifiedIdentityProvider != "") {
 		if userSpecifiedIdentityProvider != "" {
@@ -150,19 +151,36 @@ func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 		fuseMountOptions = joinMountOptions(fuseMountOptions, []string{util.OptInHnw + "=true", util.TokenServerIdentityProviderConst + "=" + identityProvider})
 	}
 
-	if enableSidecarBucketAccessCheckForSidecarVersion {
+	// For OSS K8s with Workload Identity Federation, always populate identity pool/provider for the sidecar
+	// even when skipCSIBucketAccessCheck is true, as the sidecar needs these to authenticate
+	if enableWorkloadIdentityForSidecar {
 		if identityProvider == "" {
-			identityProvider = s.driver.config.TokenManager.GetIdentityProvider()
-			fuseMountOptions = joinMountOptions(fuseMountOptions, []string{util.TokenServerIdentityProviderConst + "=" + identityProvider})
+			// Get identity provider from driver config or user-specified value
+			if userSpecifiedIdentityProvider != "" {
+				identityProvider = userSpecifiedIdentityProvider
+			} else {
+				identityProvider = s.driver.config.TokenManager.GetIdentityProvider()
+			}
+			if identityProvider != "" {
+				fuseMountOptions = joinMountOptions(fuseMountOptions, []string{util.TokenServerIdentityProviderConst + "=" + identityProvider})
+			}
 		}
-		klog.Infof("Got identity provider %s", identityProvider)
-
-		identityPool := s.driver.config.TokenManager.GetIdentityPool()
-		fuseMountOptions = joinMountOptions(fuseMountOptions, []string{
-			util.PodNamespaceConst + "=" + vc[VolumeContextKeyPodNamespace],
-			util.ServiceAccountNameConst + "=" + vc[VolumeContextKeyServiceAccountName],
-			util.EnableSidecarBucketAccessCheckConst + "=" + strconv.FormatBool(s.driver.config.EnableSidecarBucketAccessCheck),
-			util.TokenServerIdentityPoolConst + "=" + identityPool})
+		
+		if identityProvider != "" {
+			klog.Infof("Got identity provider %s", identityProvider)
+			identityPool := s.driver.config.TokenManager.GetIdentityPool()
+			// Pass identity pool/provider to sidecar for Workload Identity authentication
+			// Only enable bucket access check if skipCSIBucketAccessCheck is not set
+			mountOpts := []string{
+				util.PodNamespaceConst + "=" + vc[VolumeContextKeyPodNamespace],
+				util.ServiceAccountNameConst + "=" + vc[VolumeContextKeyServiceAccountName],
+				util.TokenServerIdentityPoolConst + "=" + identityPool}
+			// Enable bucket access check unless explicitly skipped by user
+			if !skipBucketAccessCheck {
+				mountOpts = append(mountOpts, util.EnableSidecarBucketAccessCheckConst + "=true")
+			}
+			fuseMountOptions = joinMountOptions(fuseMountOptions, mountOpts)
+		}
 	}
 
 	if enableCloudProfilerForSidecar && gcsFuseSidecarImage != "" && isSidecarVersionSupportedForGivenFeature(gcsFuseSidecarImage, SidecarCloudProfilerMinVersion) {

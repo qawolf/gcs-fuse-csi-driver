@@ -73,6 +73,7 @@ const (
 	SidecarBucketAccessCheckMinVersion     = "v1.99.0-gke.0"
 	SidecarCloudProfilerMinVersion         = "v1.99.0-gke.0"
 	MachineTypeAutoConfigSidecarMinVersion = "v1.15.1-gke.0" // #nosec G101
+	SidecarWorkloadIdentityMinVersion      = "v1.15.1-gke.0" // #nosec G101 - Minimum version for passing identity pool/provider to sidecar
 	FlagFileForDefaultingPath              = "flags-for-defaulting"
 )
 

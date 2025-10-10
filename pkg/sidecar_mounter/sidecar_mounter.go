@@ -72,13 +72,13 @@ func New(mounterPath string) *Mounter {
 }
 
 func (m *Mounter) Mount(ctx context.Context, mc *MountConfig) error {
-	// Start the token server for HostNetwork enabled pods.
+	// Start the token server for HostNetwork enabled pods or OSS K8s with Workload Identity Federation.
 	// For managed sidecar, the token server identity provider is only populated when host network pod ksa feature is opted in.
 	var tokenSource oauth2.TokenSource
 	var audience string
 	var err error
 
-	// TODO(amacaskill): Add support for hostnetwork pods on OSS k8s.
+	// Start token server for hostNetwork pods
 	if mc.HostNetworkKSAOptIn {
 		if mc.TokenServerIdentityProvider != "" {
 			klog.V(4).Infof("Pod has hostNetwork enabled and token server feature is supported and opted in. Starting Token Server on %s/%s", mc.TempDir, TokenFileName)
@@ -97,7 +97,24 @@ func (m *Mounter) Mount(ctx context.Context, mc *MountConfig) error {
 				return fmt.Errorf("Failed to create token source, got error %q", err)
 			}
 		}
+	} else if mc.TokenServerIdentityPool != "" && mc.TokenServerIdentityProvider != "" {
+		// For OSS K8s with Workload Identity Federation, start token server and create tokenSource for bucket access check
+		klog.V(4).Infof("Workload Identity Federation detected. Starting Token Server on %s/%s", mc.TempDir, TokenFileName)
+		go StartTokenServer(ctx, mc.TempDir, TokenFileName, mc.TokenServerIdentityProvider)
+		
+		if mc.EnableSidecarBucketAccessCheck {
+			// Fetch custom tokensource and audience for Workload Identity Federation
+			audience, err = getAudienceFromContextAndIdentityProvider(ctx, mc.TokenServerIdentityProvider)
+			if err != nil {
+				return fmt.Errorf("failed to get audience from the context: %w", err)
+			}
+			tokenSource, err = m.fetchTokenSource(mc.PodNamespace, mc.ServiceAccountName, audience)
+			if err != nil {
+				return fmt.Errorf("Failed to create token source, got error %q", err)
+			}
+		}
 	}
+	
 	if mc.EnableSidecarBucketAccessCheck {
 		err := m.checkBucketAccessWithRetry(ctx, m.StorageServiceManager, tokenSource, m.TokenManager, mc.BucketName, mc.TokenServerIdentityProvider, mc)
 		if err != nil {
