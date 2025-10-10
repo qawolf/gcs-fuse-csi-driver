@@ -101,7 +101,7 @@ func (m *Mounter) Mount(ctx context.Context, mc *MountConfig) error {
 		// For OSS K8s with Workload Identity Federation, start token server and create tokenSource for bucket access check
 		klog.V(4).Infof("Workload Identity Federation detected. Starting Token Server on %s/%s", mc.TempDir, TokenFileName)
 		go StartTokenServer(ctx, mc.TempDir, TokenFileName, mc.TokenServerIdentityProvider)
-		
+
 		if mc.EnableSidecarBucketAccessCheck {
 			// Fetch custom tokensource and audience for Workload Identity Federation
 			audience, err = getAudienceFromContextAndIdentityProvider(ctx, mc.TokenServerIdentityProvider)
@@ -114,7 +114,7 @@ func (m *Mounter) Mount(ctx context.Context, mc *MountConfig) error {
 			}
 		}
 	}
-	
+
 	if mc.EnableSidecarBucketAccessCheck {
 		err := m.checkBucketAccessWithRetry(ctx, m.StorageServiceManager, tokenSource, m.TokenManager, mc.BucketName, mc.TokenServerIdentityProvider, mc)
 		if err != nil {

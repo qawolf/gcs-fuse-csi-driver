@@ -165,7 +165,7 @@ func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 				fuseMountOptions = joinMountOptions(fuseMountOptions, []string{util.TokenServerIdentityProviderConst + "=" + identityProvider})
 			}
 		}
-		
+
 		if identityProvider != "" {
 			klog.Infof("Got identity provider %s", identityProvider)
 			identityPool := s.driver.config.TokenManager.GetIdentityPool()
@@ -177,7 +177,7 @@ func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 				util.TokenServerIdentityPoolConst + "=" + identityPool}
 			// Enable bucket access check unless explicitly skipped by user
 			if !skipBucketAccessCheck {
-				mountOpts = append(mountOpts, util.EnableSidecarBucketAccessCheckConst + "=true")
+				mountOpts = append(mountOpts, util.EnableSidecarBucketAccessCheckConst+"=true")
 			}
 			fuseMountOptions = joinMountOptions(fuseMountOptions, mountOpts)
 		}
