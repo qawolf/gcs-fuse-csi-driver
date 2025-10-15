@@ -17,7 +17,7 @@ limitations under the License.
 
 # Google Cloud Storage FUSE CSI Driver
 
-This is a temporary branch until this (PR)[https://github.com/GoogleCloudPlatform/gcs-fuse-csi-driver/pull/979] is merged.
+This is a temporary branch until this [PR](https://github.com/GoogleCloudPlatform/gcs-fuse-csi-driver/pull/979) is merged.
 
 That PR contains the necessary changes to deploy this driver to our Talos clusters.
 
