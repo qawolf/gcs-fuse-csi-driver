@@ -210,6 +210,12 @@ func New(kubeconfigPath string, informerResyncDurationSec int) (Interface, error
 	}
 	rc.ContentType = runtime.ContentTypeProtobuf
 
+	// Disable client-side rate limiting and rely on API server's APF (API Priority and Fairness) instead.
+	// Setting QPS to -1 disables the client-side rate limiter.
+	rc.QPS = -1
+	rc.Burst = 0
+	klog.Info("K8s API client rate limiting disabled, relying on server-side APF")
+
 	clientset, err := kubernetes.NewForConfig(rc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to configure k8s client: %w", err)
