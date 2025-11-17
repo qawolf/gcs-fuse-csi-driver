@@ -83,9 +83,11 @@ func (s *nodeServer) NodeGetCapabilities(_ context.Context, _ *csi.NodeGetCapabi
 
 func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
 	// Rate limit NodePublishVolume calls to avoid kube API throttling.
-	if err := s.limiter.Wait(ctx); err != nil {
-		return nil, status.Errorf(codes.Aborted, "NodePublishVolume request is aborted due to rate limit: %v", err)
-	}
+	// DISABLED: Removing artificial rate limiting to allow unlimited concurrent mounts.
+	// The K8s API server has its own rate limiting (APF) for protection.
+	// if err := s.limiter.Wait(ctx); err != nil {
+	// 	return nil, status.Errorf(codes.Aborted, "NodePublishVolume request is aborted due to rate limit: %v", err)
+	// }
 
 	// Validate the target path.
 	targetPath := req.GetTargetPath()
